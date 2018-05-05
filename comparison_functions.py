@@ -10,65 +10,34 @@ import pandas as pd
 #   1.2)Define the variable change per category functions
 
 
-def direct_comparison(df, col_variants, unique_identifiers, end_step, start_step=None
-                      , start_step_unique=True, end_step_unique=False):
-    if start_step:
-        if start_step_unique:
-            col_start = df[df[start_step]>0].pivot_table(index=col_variants, values=unique_identifiers
-                                                         , aggfunc='nunique')[unique_identifiers]
-        else:
-            col_start = df.pivot_table(index=col_variants, values=start_step, aggfunc='sum')[start_step]
+def step_aggregation(df, col_variants, unique_identifiers, step, step_unique=True):
+    if step_unique:
+        col_agg = df[df[step] > 0].pivot_table(index=col_variants, values=unique_identifiers
+                                               , aggfunc='nunique')[unique_identifiers]
     else:
-        col_start = df.pivot_table(index=col_variants, values=unique_identifiers, aggfunc='nunique')[unique_identifiers]
-    if end_step_unique:
-        col_end = df[df[end_step] > 0].pivot_table(index=col_variants, values=unique_identifiers
-                                                     , aggfunc='nunique')[unique_identifiers]
+        col_agg= df.pivot_table(index=col_variants, values=step, aggfunc='sum')[step]
+
+    return col_agg
+
+
+def step_without_cat(df, col_variants, category, unique_identifiers, step, step_unique):
+    # this is a most efficient workaround to count unique of the category without the values
+    # leveraging the "vector" way of pandas/numpy
+    if step_unique:
+        df_subset = df[df[step] > 0].loc[:, [unique_identifiers, col_variants, category]]
+        uniq_x_cat = df_subset.pivot_table(index=[unique_identifiers, col_variants], columns=category
+                                          , values=unique_identifiers, aggfunc='nunique').fillna(0)
+        uniq_x_cat[uniq_x_cat.sum(axis=1) != 1] = 0 #identify the rows that are uniques in all categories
+
+        uniq_x_cat = pd.DataFrame({'uniq_cat': uniq_x_cat.stack()})
+        uniq_x_cat.reset_index(level=[col_variants, category], inplace=True)
+        cat_agg = uniq_x_cat.pivot_table(index=[col_variants, category], values='uniq_cat', aggfunc='sum')['uniq_cat']
     else:
-        col_end = df.pivot_table(index=col_variants, values=end_step, aggfunc='sum')[end_step]
+        cat_agg = step_aggregation(df=df, col_variants=[col_variants, category], unique_identifiers=unique_identifiers
+                                   , step=step, step_unique=step_unique)
 
-    return [col_start, col_end]
+    all_values = step_aggregation(df=df, col_variants=col_variants, unique_identifiers=unique_identifiers
+                                  , step=step, step_unique=step_unique)
+    df_without_cat = pd.DataFrame({'overall': all_values}).join(pd.DataFrame({'cat_agg': cat_agg}))
 
-
-def category_comparison(df, col_variants, unique_identifiers, end_step, category, base_variant
-                        , start_step=None, start_step_unique=True, end_step_unique=False):
-    """
-    cat_values = direct_comparison(df=df, col_variants=[col_variants, category], unique_identifiers=unique_identifiers
-                                   , end_step=end_step, start_step=start_step, start_step_unique=start_step_unique
-                                   , end_step_unique=end_step_unique)
-
-    all_values = direct_comparison(df=df, col_variants=col_variants, unique_identifiers=unique_identifiers
-                                   , end_step=end_step, start_step=start_step, start_step_unique=start_step_unique
-                                   , end_step_unique=end_step_unique)
-    weight = cat_values[0]/all_values[0]
-    all_change = all_values[1]/all_values[0]
-    all_change = all_change/all_change[base_variant]
-    cat_change = cat_values[1]/cat_values[0]
-    cat_change = cat_change/cat_change[base_variant]
-    cat_exclusion = pd.DataFrame({'overall':all_change}).join(pd.DataFrame({'per_impact': cat_change * weight}))
-    cat_exclusion = (cat_exclusion.overall - cat_exclusion.per_impact) * ((weight * (-1) + 1).pow(-1))
-
-    return cat_exclusion
-    """
-
-    all_values = direct_comparison(df=df, col_variants=col_variants, unique_identifiers=unique_identifiers
-                                   , end_step=end_step, start_step=start_step, start_step_unique=start_step_unique
-                                   , end_step_unique=end_step_unique)
-
-    all_change = all_values[1]/all_values[0]
-    all_change = all_change/all_change[base_variant]
-
-    if start_step_unique or end_step_unique:
-        cat_values = direct_comparison(df=df, col_variants=[col_variants, category], unique_identifiers=unique_identifiers
-                                       , end_step=end_step, start_step=start_step, start_step_unique=start_step_unique
-                                       , end_step_unique=end_step_unique)
-        cat_start = pd.DataFrame({'overall': all_values[0]}).join(pd.DataFrame({'cat_val': cat_values[0]}))
-        cat_start = cat_start['overall'] - cat_start['cat_val']
-
-        cat_end = pd.DataFrame({'overall': all_values[1]}).join(pd.DataFrame({'cat_val': cat_values[1]}))
-        cat_end = cat_end['overall'] - cat_end['cat_val']
-
-        cat_change = cat_end/cat_start
-
-        return [cat_change/cat_change[base_variant], cat_values[0], all_change, all_values[0]]
-    else:
-        pass
+    return df_without_cat['overall'] - df_without_cat['cat_agg']
